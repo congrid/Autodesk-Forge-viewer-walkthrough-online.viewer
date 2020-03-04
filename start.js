@@ -174,16 +174,14 @@ var upload = multer({ dest: 'tmp/' }); // Save file into local /tmp folder
 app.post('/api/forge/datamanagement/bucket/upload', upload.single('fileToUpload'), function (req, res) {
     var fs = require('fs'); // Node.js File system for reading files
     fs.readFile(req.file.path, function (err, filecontent) {
-        Axios({
-            method: 'PUT',
-            url: 'https://developer.api.autodesk.com/oss/v2/buckets/' + encodeURIComponent(bucketKey) + '/objects/' + encodeURIComponent(req.file.originalname),
-            headers: {
-                Authorization: 'Bearer ' + access_token,
-                'Content-Disposition': req.file.originalname,
-                'Content-Length': filecontent.length
-            },
-            data: filecontent
-        })
+        // For production use Autodesk recommends that under 100MB files are uploaded without chunking.
+        // For testing purposes we will use a limit of 10MB.
+        // https://forge.autodesk.com/en/docs/data/v2/reference/http/buckets-:bucketKey-objects-:objectName-resumable-PUT/
+        const SMALL_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
+
+        const uploadFunction = (filecontent.length > SMALL_FILE_SIZE_LIMIT_BYTES ? uploadFileBig : uploadFileSmall);
+
+        uploadFunction.call(null, req.file.originalname, filecontent)
             .then(function (response) {
                 // Success
                 console.log(response);
@@ -235,3 +233,74 @@ app.get('/api/forge/modelderivative/:urn', function (req, res) {
             res.send('Error at Model Derivative job.');
         });
 });
+
+const uploadFileSmall = function (originalFileName, dataBuffer) {
+    return Axios({
+        method: 'PUT',
+        url: 'https://developer.api.autodesk.com/oss/v2/buckets/' + encodeURIComponent(bucketKey) + '/objects/' + encodeURIComponent(originalFileName),
+        headers: {
+            Authorization: 'Bearer ' + access_token,
+            'Content-Disposition': originalFileName,
+            'Content-Length': dataBuffer.length
+        },
+        data: dataBuffer
+    });
+};
+
+const uploadFileBig = function (originalFileName, dataBuffer) {
+    // Autodesk recommends 5MB chunks
+    // https://forge.autodesk.com/en/docs/data/v2/reference/http/buckets-:bucketKey-objects-:objectName-resumable-PUT/
+    const UPLOAD_CHUNK_BYTES = (5 * 1024 * 1024);
+
+    const sessionId = (new Date()).getTime();
+    const fullContentLengthBytes = dataBuffer.length;
+    var chunks = [];
+
+    while (chunks.length * UPLOAD_CHUNK_BYTES < dataBuffer.length) {
+        var newChunkStartByte = (chunks.length * UPLOAD_CHUNK_BYTES);
+        var bytesLeftInBuffer = (dataBuffer.length - newChunkStartByte);
+        var newChunkEndByte = (bytesLeftInBuffer > UPLOAD_CHUNK_BYTES ? newChunkStartByte + UPLOAD_CHUNK_BYTES : dataBuffer.length);
+
+        console.log('%s CHUNK CREATED %d-%d/%d', sessionId, newChunkStartByte, newChunkEndByte, fullContentLengthBytes);
+        chunks.push(dataBuffer.slice(newChunkStartByte, newChunkEndByte));
+    }
+
+    return chunks.reduce(function (prev, chunkData, index) {
+            const chunkStartByte = index * UPLOAD_CHUNK_BYTES;
+            const chunkEndByte = chunkStartByte + chunkData.length;
+            return prev.then(function () {
+                return uploadFileChunk(sessionId, originalFileName, fullContentLengthBytes, chunkStartByte, chunkEndByte, chunkData);
+            });
+        }, Promise.resolve())
+        .then(function(response) {
+            console.log('%s CHUNKS UPLOADED', sessionId, response.data);
+            return response;
+        })
+};
+
+const uploadFileChunk = function (sessionId, originalFileName, fullContentLengthBytes, chunkStartByte, chunkEndByte, chunkData) {
+    const lastByte = chunkEndByte - 1;
+    console.log('%s UPLOADING CHUNK %d bytes from %d to %d of %d..', sessionId, chunkData.length, chunkStartByte, lastByte, fullContentLengthBytes);
+    return Axios({
+            method: 'PUT',
+            url: 'https://developer.api.autodesk.com/oss/v2/buckets/' + encodeURIComponent(bucketKey) + '/objects/' + encodeURIComponent(originalFileName) + '/resumable',
+            headers: {
+                Authorization: 'Bearer ' + access_token,
+                'Content-Type': 'text/plain; charset=UTF-8',
+                'Content-Disposition': originalFileName,
+                'Content-Range': 'bytes ' + chunkStartByte+'-'+lastByte+'/'+fullContentLengthBytes,
+                'Session-Id': sessionId,
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            data: chunkData,
+        })
+        .then(function (response) {
+          console.log('%s UPLOADING CHUNK %d bytes from %d to %d of %d.. DONE', sessionId, chunkData.length, chunkStartByte, lastByte, fullContentLengthBytes);
+          return response;
+        })
+        .catch(function (err) {
+          console.error('%s UPLOADING CHUNK %d bytes from %d to %d of %d.. FAILED', sessionId, chunkData.length, chunkStartByte, lastByte, fullContentLengthBytes, err);
+          throw err;
+        })
+};
