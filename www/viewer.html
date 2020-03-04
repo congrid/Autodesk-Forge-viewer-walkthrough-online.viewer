@@ -34,7 +34,7 @@
             api: 'derivativeV2', // TODO: for models uploaded to EMEA change this option to 'derivativeV2_EU'
             getAccessToken: getForgeToken
         };
-        var documentId = 'urn:' + getUrlParameter('urn');
+        var documentIds = getUrlParameter('urn').split(',').map(function (urn) { return 'urn:'+urn })
 
         // Run this when the page is loaded
         Autodesk.Viewing.Initializer(options, function onInitialized(){
@@ -45,7 +45,9 @@
                 viewer = new Autodesk.Viewing.GuiViewer3D(htmlElement);
                 viewer.start();
                 // Load the document into the viewer.
-                Autodesk.Viewing.Document.load(documentId, onDocumentLoadSuccess, onDocumentLoadFailure);
+                documentIds.forEach(function (documentId) {
+                    Autodesk.Viewing.Document.load(documentId, onDocumentLoadSuccess, onDocumentLoadFailure);
+                })
             }
         });
 
@@ -59,7 +61,7 @@
             // which references the root node of a graph that wraps each object from the Manifest JSON.
             var viewable = doc.getRoot().getDefaultGeometry();
             if (viewable) {
-                viewer.loadDocumentNode(doc, viewable).then(function(result) {
+                viewer.loadDocumentNode(doc, viewable, { keepCurrentModels: true }).then(function(result) {
                     console.log('Viewable Loaded!');
                 }).catch(function(err) {
                     console.log('Viewable failed to load.');

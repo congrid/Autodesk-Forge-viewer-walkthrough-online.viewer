@@ -74,6 +74,12 @@ Click on the `Authorize me` link and then click through the links on the browser
 
 *NOTE:* _It may take several minutes to complete translate the file._
 
+# Viewing multiple models at once
+
+By default the viewer only shows the latest uploaded model.
+
+But in the viewer page, instead of a single `urn=XXXX` you can change the query parameter to a comma separated list of `urn`s, eg `urn=XXXX,YYYY,ZZZZ`, which will all then be loaded to the same view.
+
 # License
 This sample is licensed under the terms of the [MIT License](http://opensource.org/licenses/MIT). Please see the [LICENSE](LICENSE) file for full details.
 
